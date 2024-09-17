@@ -1,0 +1,14 @@
+imbalanced-learn
+scikit-learn
+pandas
+numpy
+matplotlib
+flask
+flask[async]
+pymongo
+schedule
+sendgrid
+flasgger
+werkzeug
+spacy
+textblob
