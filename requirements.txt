@@ -12,3 +12,5 @@ flasgger
 werkzeug
 spacy
 textblob
+langchain
+transformers
