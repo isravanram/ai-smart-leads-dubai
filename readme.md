@@ -1,4 +1,4 @@
-![image](https://github.com/user-attachments/assets/3a44a563-597a-4fe1-9557-e4bb9aed500b)
+![image](https://github.com/user-attachments/assets/06342738-b494-4c59-b11e-7de44d07c7ee)
 
 # Two ways to execute the App
 
