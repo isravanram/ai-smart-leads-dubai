@@ -12,15 +12,25 @@ from sklearn.model_selection import train_test_split, cross_val_score
 from sklearn.ensemble import RandomForestClassifier
 from sklearn.metrics import classification_report, accuracy_score
 import spacy
-from textblob import Word,TextBlob
-
-# Loading the English language model 'Spacy' for processing and analyzing text data
-nlp = spacy.load("en_core_web_sm")
+from textblob import Word, TextBlob
+from langchain.llms import OpenAI
+from langchain.chains import LLMChain
+from langchain.prompts import PromptTemplate
+from langchain.agents import Tool, initialize_agent, AgentType
+from transformers import pipeline
+from langchain import HuggingFacePipeline 
 
 # Class handling the ML operations
 class SmartLeads:
     def __init__(self):
         self.X, self.y, self.vectorizer, self.scaler, self.model = self.build_model()
+        
+        # Loading the English language model 'Spacy' for processing and analyzing text data
+        self.nlp = spacy.load("en_core_web_sm")
+        
+        # Set up the text generation pipeline using GPT-NeoX-20B
+        text_gen_pipeline = pipeline("text-generation", model="EleutherAI/gpt-neox-20b")
+        self.llm_model = HuggingFacePipeline(pipeline=text_gen_pipeline)
         self.compute_cross_validation_score(cv=19, scoring="accuracy")
 
     # Building the model
@@ -184,8 +194,17 @@ class SmartLeads:
     # Detecting the industry type
     def detect_industry(self, text):
         try:
-            industries = ["consulting", "healthcare", "technology", "beauty", "retail", "finance", "education"]
-            doc = nlp(text)
+            # Can be retrieved from MongoDB table as well
+            industries = [
+            "consulting", "healthcare", "technology", "beauty", "retail", "finance", 
+            "education", "manufacturing", "automotive", "real estate", "transportation", 
+            "hospitality", "insurance", "media and entertainment", "telecommunications", 
+            "energy and utilities", "agriculture", "e-commerce", "pharmaceuticals", 
+            "logistics", "government", "nonprofit", "food and beverage", "cybersecurity", 
+            "sports and fitness", "construction", "human resources", "fashion", 
+            "environmental services"
+            ]
+
             industry_detected = [industry for industry in industries if industry in text.lower()]
             return industry_detected if industry_detected else ["Industry Sector"]
         except Exception as e:
@@ -195,8 +214,40 @@ class SmartLeads:
     # Detecting the pain points for the industry
     def detect_pain_points(self, text):
         try:
-            doc = nlp(text)
-            pain_keywords = ["struggling", "issue", "problem", "challenge", "difficulty", "abandonment"]
+            doc = self.nlp(text)
+
+            # Can be retrieved from MongoDB table as well
+            pain_keywords = [
+            "struggling", "issue", "problem", "challenge", "difficulty", "abandonment",
+            "frustration", "setback", "obstacle", "risk", "failure", "concern",
+            "barrier", "decline", "shortage", "inefficiency", "loss", "bottleneck",
+            "confusion", "neglect", "insecurity",
+            
+            # Healthcare Pain Points
+            "adverse effects", "misdiagnosis", "patient turnover", "regulatory compliance",
+            "insurance claims", "resource allocation",
+            
+            # Technology Pain Points
+            "cybersecurity threats", "software bugs", "data breaches", "scalability issues",
+            "user experience", "technical debt",
+            
+            # Retail Pain Points
+            "inventory management", "customer retention", "supply chain disruption",
+            "seasonal fluctuations", "price competition", "loss prevention",
+            
+            # Finance Pain Points
+            "compliance risks", "market volatility", "fraud", "debt", 
+            "cash flow problems", "interest rate changes",
+            
+            # Education Pain Points
+            "student engagement", "curriculum relevance", "funding shortages",
+            "accessibility issues", "retention rates", "staff turnover",
+            
+            # Manufacturing Pain Points
+            "production delays", "quality control", "workforce safety", 
+            "machine downtime", "waste management", "supply chain challenges"
+            ]
+
             pain_points = [token.text for token in doc if token.lemma_ in pain_keywords]
             return pain_points if pain_points else ["AI business hurdles"]
         except Exception as e:
@@ -204,82 +255,90 @@ class SmartLeads:
             return ["Error detecting the pain points"]
 
 
-    # Generate Email content using NLP
+    # Example of integrating LangChain to generate the email content dynamically
     def generate_email_content(self, lead_info, engagement_level):
         try:
-            # Detect industry and pain points from the description
-            industry = self.detect_industry(lead_info['Description'])
-            pain_points = self.detect_pain_points(lead_info['Description'])
-
-            # Base email content for all engagement levels
-            email_content = f"""
-                Dear {lead_info['Company Name']},
-
-                We noticed that you are in the {industry[0]} industry and might be facing challenges like {', '.join(pain_points)}.
-
-                We can help address these pain points with our tailored solutions.
-
-                Let's connect and explore how we can assist your business!
-
-                Click here to explore our solutions: http://127.0.0.1:8080/track_click?email={lead_info['Email ID']}
-
-                Best regards,
-
-                The Taippa Team
-                United Arab Emirates
-                Ph: +971-77777000000
-            """
-
-
-            # Add a personalized follow-up if engagement level is greater than 0
+            
             if engagement_level > 0:
-                personalized_message = self.create_personalized_message(lead_info, engagement_level)
-                email_content = f"{personalized_message}"
-            
-            # Set the subject based on engagement level
+                personalized_message = self.draft_followup_content(lead_info, engagement_level)
+                generated_email_content = f"{personalized_message}"
+            else:
+
+                # Prompt template for generating email content based on industry and pain points, later stored in MongoDB email_prompts table
+                email_prompt_template = """
+                    Provided the industry type: {industry} and pain_points: {pain_points}, draft an email template to send to the following company to propose AI solutions for their challenges:
+                    Company: {company_name}, Email: {email_id}
+                """
+                email_prompt = PromptTemplate(
+                    input_variables=["industry", "pain_points", "company_name", "email_id"],
+                    template=email_prompt_template,
+                )
+                tools = [
+                Tool(
+                     name="Detect Industry",
+                     func=self.detect_industry(lead_info['Description']),
+                     description="Detect the industry from the lead description."
+                ),
+                 Tool(
+                     name="Detect Pain Points",
+                     func=self.detect_pain_points(lead_info['Description']), 
+                     description="Detect the pain points from the lead description."
+                ),
+                ]
+              
+                # Initialize the agent with tools, can add more agents in the future for carrying multiple tasks
+                agent = initialize_agent(tools, self.llm_model, agent_type=AgentType.ZERO_SHOT_REACT_DESCRIPTION)
+                
+                industry = agent.run(f"Detect the industry of this company: {lead_info['Description']}")
+                pain_points = agent.run(f"Detect the pain points of this company: {lead_info['Description']}")
+                chain = LLMChain(llm=self.llm_model, prompt=email_prompt)
+
+                # Generate email content using the LLM model
+                generated_email_content = chain.run({
+                    "industry": industry[0],
+                    "pain_points": ', '.join(pain_points),
+                    "company_name": lead_info['Company Name'],
+                    "email_id": lead_info['Email ID']
+                })
+
+            if engagement_level==0:
+                solution_link = f"\n\nClick here to explore our solutions: http://127.0.0.1:8080/track_click?email={lead_info['Email ID']}"
+            else:
+                solution_link = ""
             subject = "Discover Innovative AI Strategies for Your Business" if engagement_level == 0 else "Following Up on AI Strategies: Next Steps for Your Business"
-            
-            return subject, email_content
-
-        except KeyError as e:
-            print(f"KeyError: Missing expected key in lead_info: {e}")
-            raise
-
-        except IndexError as e:
-            print(f"IndexError: Issue with accessing industry or pain points: {e}")
-            raise
+            return subject, generated_email_content + solution_link
 
         except Exception as e:
-            print(f"An unexpected error occurred in generate_email_content: {e}")
+            print(f"An unexpected error occurred while generating email content: {e}")
             raise
 
-    # Creating personalized email for follow up (Can be enhanced in future to include NLP to rephrase content, engage with client's response and analyze via sentiment analysis to send personalized messages. Currently implemented with (less) dummy data)
-    def create_personalized_message(self, lead_info, engagement_level):
+
+    # Function to create a personalized follow-up email (future enhancements can include NLP for rephrasing, responding to client interactions, and sentiment analysis to generate tailored messages. Current implementation uses basic dummy data)
+    def draft_followup_content(self, lead_info, engagement_level):
         try:
-            # Add personalized follow-up content
-            message = f"""
-                Dear {lead_info['Company Name']},
-
-                I hope this email finds you well.
-
-                I wanted to follow up on our recent discussion regarding AI solutions for your business. We noticed your interest and would like to offer further assistance in exploring how our AI solutions can drive innovation and efficiency in your operations.
-
-                Here’s a brief overview of what we can offer:
-                A) Tailored AI Solutions
-                B) Expert Consultation
-                C) Case Studies & Success Stories
-
-                We’re committed to helping you leverage AI to achieve your business goals. If you have any questions or would like to schedule a demo or consultation, please feel free to reach out.
-
-                Best regards,
-
-                The Taippa Team
-                United Arab Emirates
-                Ph: +971-77777000000
+            prompt_template = """
+                Given the following lead information, draft a personalized follow-up email for a company in the {industry} sector:
+                Company: {company_name}, Email: {email_id}, Engagement Level: {engagement_level}
             """
+            # Create the PromptTemplate object with input variables
+            email_prompt = PromptTemplate(
+                input_variables=["industry", "company_name", "email_id", "engagement_level"],
+                template=prompt_template,
+            )
 
-            return message
+            # Create the LLMChain to integrate the model and the prompt
+            chain = LLMChain(llm=self.llm_model, prompt=email_prompt)
+
+            # Generate the personalized email based on the lead info and engagement level
+            personalized_email = chain.run({
+                "industry": self.detect_industry(lead_info['Description'])[0],
+                "company_name": lead_info['Company Name'],
+                "email_id": lead_info['Email ID'],
+                "engagement_level": engagement_level
+            })
+
+            return personalized_email
 
         except Exception as e:
-            print(f"An unexpected error occurred in create_personalized_message: {e}")
+            print(f"Error encountered while generating follow-up content: {e}")
             raise
